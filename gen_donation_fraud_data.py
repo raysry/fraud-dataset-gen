@@ -272,9 +272,9 @@ class EntityPool:
         available = set(self.normal_ids)
 
         for _ in range(num_clubs):
-            size = int(self.rng.integers(200, min(2001, len(available) + 1)))
-            if size > len(available):
+            if len(available) < 200:
                 break
+            size = int(self.rng.integers(200, min(2001, len(available) + 1)))
             members = list(self.rng.choice(list(available), size=size, replace=False))
             # 1-3 top creators they focus on
             num_targets = int(self.rng.integers(1, 4))
