@@ -1,7 +1,7 @@
 # Generated data files
 donations.csv
 donations.csv.gz
-labels.json
+labels.csv
 run_*/
 
 # Python

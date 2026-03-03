@@ -39,6 +39,13 @@ CSV_COLUMNS = [
     "account_reg_date", "is_refund",
 ]
 
+LABEL_COLUMNS = [
+    "user_id", "label", "ring_id", "difficulty", "business_model",
+    "refund_strategy", "is_stealth_fake", "is_delayed_activation",
+    "is_shared_fake", "is_suspicious_normal", "is_cross_donor_recipient",
+    "fan_club_id",
+]
+
 PRESETS = {"small": 1_000, "medium": 10_000_000, "large": 50_000_000}
 
 
@@ -977,119 +984,147 @@ def write_csv(rows: list, output_path: str, compress: bool):
 
 def write_labels(pool: EntityPool, gen: DonationGenerator, rows: list,
                  output_path: str, label_noise: float):
-    """Write labels.json with ground truth."""
-    fpath = os.path.join(output_path, "labels.json")
+    """Write labels.csv with ground truth (one row per user_id)."""
+    fpath = os.path.join(output_path, "labels.csv")
 
-    # Count stats
+    # Build lookup sets
+    stealth_set = set(gen.stealth_fakes)
+    delayed_set = set()
+    for ring in pool.rings:
+        delayed_set.update(ring.get("delayed_activation_fakes", []))
+    suspicious_set = set(pool.suspicious_normal_ids)
+    cross_donor_set = set(pool.cross_donor_recipient_ids)
+
+    # Fan club membership: user_id -> club index
+    fan_club_map = {}
+    for club_idx, club in enumerate(pool.fan_clubs):
+        for m in club["members"]:
+            if m not in fan_club_map:
+                fan_club_map[m] = club_idx
+        for r in club["recipients"]:
+            if r not in fan_club_map:
+                fan_club_map[r] = club_idx
+
+    # Shared fakes: fakes that appear in more than one ring
+    fake_ring_count = {}
+    for ring in pool.rings:
+        for fid in ring["fake_ids"]:
+            fake_ring_count[fid] = fake_ring_count.get(fid, 0) + 1
+    shared_fake_set = {fid for fid, cnt in fake_ring_count.items() if cnt > 1}
+
+    # Build per-user rows; track seen IDs to deduplicate
+    label_rows = []
+    seen = set()
+
+    def _make_row(user_id, label, ring=None):
+        return {
+            "user_id": uid(user_id),
+            "label": label,
+            "ring_id": ring["ring_id"] if ring else "",
+            "difficulty": ring["difficulty"] if ring else "",
+            "business_model": ring["business_model"] if ring else "",
+            "refund_strategy": ring["refund_strategy"] if ring else "",
+            "is_stealth_fake": user_id in stealth_set,
+            "is_delayed_activation": user_id in delayed_set,
+            "is_shared_fake": user_id in shared_fake_set,
+            "is_suspicious_normal": user_id in suspicious_set,
+            "is_cross_donor_recipient": user_id in cross_donor_set,
+            "fan_club_id": fan_club_map.get(user_id, ""),
+        }
+
+    # Fraud ring members (primary ring = first ring encountered)
+    for ring in pool.rings:
+        for fid in ring["fake_ids"]:
+            if fid not in seen:
+                seen.add(fid)
+                label_rows.append(_make_row(fid, "fraud_fake", ring))
+        for cid in ring["customer_ids"]:
+            if cid not in seen:
+                seen.add(cid)
+                label_rows.append(_make_row(cid, "fraud_customer", ring))
+
+    # Normal users
+    for nid in pool.normal_ids:
+        if nid not in seen:
+            seen.add(nid)
+            label_rows.append(_make_row(nid, "normal"))
+
+    # Recipients
+    for rid in pool.recipient_ids:
+        if rid not in seen:
+            seen.add(rid)
+            label_rows.append(_make_row(rid, "recipient"))
+
+    # Apply label noise
+    if label_noise > 0:
+        _apply_label_noise(label_rows, label_noise, gen.rng)
+
+    # Write CSV
+    with open(fpath, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=LABEL_COLUMNS)
+        writer.writeheader()
+        writer.writerows(label_rows)
+
+    print(f"Labels written to {fpath}")
+
+    # Compute stats (same keys as before, for stdout summary)
     fraud_donations = sum(1 for r in rows if r.get("_is_fraud"))
     total_refunds = sum(1 for r in rows if r.get("is_refund"))
     total_retries = sum(1 for r in rows if r.get("_is_retry"))
 
-    fraud_rings_json = []
-    for ring in pool.rings:
-        fraud_rings_json.append({
-            "ring_id": ring["ring_id"],
-            "difficulty": ring["difficulty"],
-            "business_model": ring["business_model"],
-            "refund_strategy": ring["refund_strategy"],
-            "fake_accounts": [uid(x) for x in ring["fake_ids"]],
-            "customer_accounts": [uid(x) for x in ring["customer_ids"]],
-            "shared_fakes_from_other_rings": [uid(x) for x in ring.get("shared_fakes_from_other_rings", [])],
-            "delayed_activation_fakes": [uid(x) for x in ring.get("delayed_activation_fakes", [])],
-            "operation_windows": [
-                [ts_to_iso(w[0]), ts_to_iso(w[1])] for w in ring.get("operation_windows", [])
-            ],
-        })
-
-    # Difficulty distribution
+    all_fake_ids = set()
+    all_customer_ids = set()
     diff_dist = {}
     bm_dist = {}
     refund_evasion_count = 0
     for ring in pool.rings:
+        all_fake_ids.update(ring["fake_ids"])
+        all_customer_ids.update(ring["customer_ids"])
         diff_dist[ring["difficulty"]] = diff_dist.get(ring["difficulty"], 0) + 1
         bm_dist[ring["business_model"]] = bm_dist.get(ring["business_model"], 0) + 1
         if ring["refund_strategy"] == "evasion":
             refund_evasion_count += 1
 
-    all_fake_ids = set()
-    all_customer_ids = set()
-    for ring in pool.rings:
-        all_fake_ids.update(ring["fake_ids"])
-        all_customer_ids.update(ring["customer_ids"])
-
-    labels = {
-        "fraud_rings": fraud_rings_json,
-        "stealth_fakes": [uid(x) for x in gen.stealth_fakes],
-        "delayed_activation_fakes": [
-            uid(x) for ring in pool.rings for x in ring.get("delayed_activation_fakes", [])
-        ],
-        "suspicious_normals": [uid(x) for x in pool.suspicious_normal_ids],
-        "fan_clubs": [
-            {
-                "recipients": [uid(x) for x in club["recipients"]],
-                "members": [uid(x) for x in club["members"]],
-            }
-            for club in pool.fan_clubs
-        ],
-        "cross_donor_recipients": [uid(x) for x in pool.cross_donor_recipient_ids],
-        "normal_users": [uid(x) for x in pool.normal_ids],
-        "recipients": [uid(x) for x in pool.recipient_ids],
-        "stats": {
-            "total_donations": len(rows),
-            "total_refunds": total_refunds,
-            "total_retries": total_retries,
-            "fraud_donations": fraud_donations,
-            "fraud_pct": round(100 * fraud_donations / len(rows), 2) if rows else 0,
-            "num_rings": len(pool.rings),
-            "num_fake_accounts": len(all_fake_ids),
-            "num_customer_accounts": len(all_customer_ids),
-            "num_normal_users": len(pool.normal_ids),
-            "num_recipients": len(pool.recipient_ids),
-            "difficulty_distribution": diff_dist,
-            "business_model_distribution": bm_dist,
-            "rings_with_refund_evasion": refund_evasion_count,
-            "num_fan_clubs": len(pool.fan_clubs),
-            "label_noise_pct": label_noise,
-        },
+    stats = {
+        "total_donations": len(rows),
+        "total_refunds": total_refunds,
+        "total_retries": total_retries,
+        "fraud_donations": fraud_donations,
+        "fraud_pct": round(100 * fraud_donations / len(rows), 2) if rows else 0,
+        "num_rings": len(pool.rings),
+        "num_fake_accounts": len(all_fake_ids),
+        "num_customer_accounts": len(all_customer_ids),
+        "num_normal_users": len(pool.normal_ids),
+        "num_recipients": len(pool.recipient_ids),
+        "difficulty_distribution": diff_dist,
+        "business_model_distribution": bm_dist,
+        "rings_with_refund_evasion": refund_evasion_count,
+        "num_fan_clubs": len(pool.fan_clubs),
+        "label_noise_pct": label_noise,
     }
-
-    # Apply label noise
-    if label_noise > 0:
-        _apply_label_noise(labels, label_noise, gen.rng)
-
-    with open(fpath, "w") as f:
-        json.dump(labels, f, indent=2)
-
-    print(f"Labels written to {fpath}")
-    return labels
+    return stats
 
 
-def _apply_label_noise(labels: dict, noise_pct: float, rng: np.random.Generator):
-    """Flip noise_pct% of labels (swap some normal↔fraud)."""
-    normal_set = set(labels["normal_users"])
-    fraud_set = set()
-    for ring in labels["fraud_rings"]:
-        fraud_set.update(ring["fake_accounts"])
+def _apply_label_noise(label_rows: list, noise_pct: float, rng: np.random.Generator):
+    """Flip noise_pct% of labels (swap some normal↔fraud_fake)."""
+    normal_indices = [i for i, r in enumerate(label_rows) if r["label"] == "normal"]
+    fraud_indices = [i for i, r in enumerate(label_rows) if r["label"] == "fraud_fake"]
 
-    total = len(normal_set) + len(fraud_set)
+    total = len(normal_indices) + len(fraud_indices)
     n_flips = int(total * noise_pct / 100)
 
-    # Flip some normals to appear in fraud
-    normal_list = list(normal_set)
-    fraud_list = list(fraud_set)
-
-    n_normal_to_fraud = min(n_flips // 2, len(normal_list))
-    n_fraud_to_normal = min(n_flips - n_normal_to_fraud, len(fraud_list))
+    n_normal_to_fraud = min(n_flips // 2, len(normal_indices))
+    n_fraud_to_normal = min(n_flips - n_normal_to_fraud, len(fraud_indices))
 
     if n_normal_to_fraud > 0:
-        flipped_normals = list(rng.choice(normal_list, size=n_normal_to_fraud, replace=False))
-        # Add to first ring's fakes
-        if labels["fraud_rings"]:
-            labels["fraud_rings"][0]["fake_accounts"].extend(flipped_normals)
+        chosen = rng.choice(normal_indices, size=n_normal_to_fraud, replace=False)
+        for idx in chosen:
+            label_rows[idx]["label"] = "fraud_fake"
 
     if n_fraud_to_normal > 0:
-        flipped_fraud = list(rng.choice(fraud_list, size=n_fraud_to_normal, replace=False))
-        labels["normal_users"].extend(flipped_fraud)
+        chosen = rng.choice(fraud_indices, size=n_fraud_to_normal, replace=False)
+        for idx in chosen:
+            label_rows[idx]["label"] = "normal"
 
 
 def print_quality_metrics(pool: EntityPool, rows: list):
@@ -1219,10 +1254,9 @@ def run_single(args, seed: int, output_dir: str):
 
     # Write outputs
     csv_path = write_csv(rows, output_dir, args.compress)
-    labels = write_labels(pool, gen, rows, output_dir, args.label_noise)
+    stats = write_labels(pool, gen, rows, output_dir, args.label_noise)
 
     # Print summary
-    stats = labels["stats"]
     elapsed = time.time() - t0
     print(f"\n{'─'*60}")
     print(f"SUMMARY (seed={seed})")

@@ -235,21 +235,21 @@ class TestIntegration:
 
             # Write outputs
             gdf.write_csv(rows, tmpdir, compress=False)
-            labels = gdf.write_labels(pool, gen, rows, tmpdir, label_noise=0)
+            stats = gdf.write_labels(pool, gen, rows, tmpdir, label_noise=0)
 
             # Check files exist
             csv_path = Path(tmpdir) / "donations.csv"
-            labels_path = Path(tmpdir) / "labels.json"
+            labels_path = Path(tmpdir) / "labels.csv"
 
             assert csv_path.exists()
             assert labels_path.exists()
 
-            # Check labels structure
-            assert 'fraud_rings' in labels
-            assert 'stealth_fakes' in labels
-            assert 'normal_users' in labels
-            assert 'stats' in labels
-            assert labels['stats']['fraud_pct'] > 0
+            # Check stats structure
+            assert 'total_donations' in stats
+            assert 'fraud_donations' in stats
+            assert 'num_rings' in stats
+            assert 'fraud_pct' in stats
+            assert stats['fraud_pct'] > 0
 
 
 if __name__ == "__main__":
