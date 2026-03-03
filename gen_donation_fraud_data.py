@@ -39,7 +39,7 @@ CSV_COLUMNS = [
     "account_reg_date", "is_refund",
 ]
 
-PRESETS = {"small": 1_000_000, "medium": 10_000_000, "large": 50_000_000}
+PRESETS = {"small": 1_000, "medium": 10_000_000, "large": 50_000_000}
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -1154,7 +1154,7 @@ def parse_args():
     p.add_argument("-n", "--total", type=int, default=10_000_000,
                    help="Total donation records (default: 10M)")
     p.add_argument("--preset", choices=["small", "medium", "large"],
-                   help="Preset sizes: small=1M, medium=10M, large=50M")
+                   help="Preset sizes: small=1K, medium=10M, large=50M")
     p.add_argument("--fraud-pct", type=float, default=1.5,
                    help="Target fraud percentage (default: 1.5)")
     p.add_argument("--normal-users", type=int, default=500_000,
