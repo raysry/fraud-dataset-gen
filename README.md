@@ -34,7 +34,7 @@ pip install -r requirements.txt
 # 10M donations with 1.5% fraud (default)
 python gen_donation_fraud_data.py
 
-# Quick test: 1M donations
+# Quick test: 1K donations
 python gen_donation_fraud_data.py --preset small
 
 # Large dataset: 50M donations, gzip compressed
@@ -55,7 +55,7 @@ python gen_donation_fraud_data.py --label-noise 0.5
 | Argument | Default | Description |
 |----------|---------|-------------|
 | `-n, --total` | `10000000` | Total donation records |
-| `--preset` | - | `small` (1M), `medium` (10M), `large` (50M) — overrides `-n` |
+| `--preset` | - | `small` (1K), `medium` (10M), `large` (50M) — overrides `-n` |
 | `--fraud-pct` | `1.5` | Target fraud percentage |
 | `--normal-users` | `500000` | Normal user pool size |
 | `--recipients` | `800` | Popular recipient pool |
