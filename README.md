@@ -1,6 +1,6 @@
 # Donation Fraud Data Generator
 
-A Python script that generates realistic donation data for a cloud storage tipping platform, designed to test Louvain-based fraud ring detection.
+A Python script that generates realistic donation data, designed to test fraud ring detection.
 
 ## Overview
 
